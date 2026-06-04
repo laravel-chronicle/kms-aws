@@ -1,0 +1,170 @@
+# laravel-chronicle/kms-aws
+
+AWS KMS signing adapter for the [Chronicle audit ledger](https://github.com/laravel-chronicle/core).
+
+Signs Chronicle checkpoints and exports via AWS KMS (ECDSA P-256). Verification
+is always **offline** — no AWS API call needed — using a cached public key.
+
+---
+
+## Installation
+
+```bash
+composer require laravel-chronicle/kms-aws
+```
+
+The package auto-discovers its service provider via Laravel's package discovery.
+
+---
+
+## Requirements
+
+- PHP 8.2+
+- `ext-openssl`
+- `laravel-chronicle/core` ^1.10
+- AWS SDK for PHP ^3.0
+
+---
+
+## AWS Setup
+
+### Create a KMS key
+
+Create an asymmetric KMS key with:
+- **Key type:** Asymmetric
+- **Key spec:** ECC_NIST_P256
+- **Key usage:** SIGN_VERIFY
+
+### Required IAM actions
+
+Attach the following IAM policy to the role that runs your application:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "kms:Sign",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID"
+    }
+  ]
+}
+```
+
+`kms:GetPublicKey` is **not** required at runtime — the public key is cached in your
+application config and never fetched from KMS during verification.
+
+### Retrieve and cache the public key
+
+Retrieve your KMS key's public key once and store it in your config:
+
+```bash
+aws kms get-public-key \
+  --key-id arn:aws:kms:REGION:ACCOUNT_ID:key/KEY_ID \
+  --query 'PublicKey' --output text | base64 -d | \
+  openssl pkey -pubin -inform DER -outform PEM
+```
+
+This outputs a PEM string like:
+
+```
+-----BEGIN PUBLIC KEY-----
+MFkwEwYH...
+-----END PUBLIC KEY-----
+```
+
+Store this as the `public_key` in your Chronicle signing config (see below).
+
+---
+
+## Configuration
+
+Register the KMS key in `config/chronicle.php` under `signing.keys`:
+
+```php
+use Chronicle\KmsAws\AwsKmsSigningProvider;
+
+'signing' => [
+    'active' => env('CHRONICLE_ACTIVE_KEY', 'kms-production'),
+
+    'keys' => [
+        'kms-production' => [
+            'provider'   => AwsKmsSigningProvider::class,
+            'algorithm'  => 'ecdsa-p256',
+            'key_arn'    => env('CHRONICLE_KMS_KEY_ARN'),
+            'public_key' => env('CHRONICLE_KMS_PUBLIC_KEY'),  // PEM string
+        ],
+    ],
+],
+```
+
+Set the corresponding environment variables:
+
+```dotenv
+AWS_DEFAULT_REGION=eu-west-1
+CHRONICLE_ACTIVE_KEY=kms-production
+CHRONICLE_KMS_KEY_ARN=arn:aws:kms:eu-west-1:123456789012:key/your-key-id
+CHRONICLE_KMS_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+-----END PUBLIC KEY-----
+"
+```
+
+---
+
+## How it works
+
+| Operation  | Where it runs                                                  |
+|------------|----------------------------------------------------------------|
+| `sign()`   | **Remote** — calls KMS `Sign` API with `MessageType: DIGEST`   |
+| `verify()` | **Local** — `openssl_verify` against the cached PEM public key |
+
+The private key never leaves AWS KMS. Verification is offline and instant.
+
+---
+
+## Key rotation
+
+Chronicle's key rotation works identically for KMS-backed keys. Retire the old key by
+keeping only its `public_key` in the ring (omit `key_arn`), then add the new KMS key as
+active. Historic checkpoints and exports continue to verify offline against the retained
+public key.
+
+Example two-key ring after rotation:
+
+```php
+'signing' => [
+    'active' => 'kms-2026',
+    'keys' => [
+        // Retired — switch to EcdsaSigningProvider (from core) for verify-only mode.
+        // AwsKmsSigningProvider requires key_arn and cannot be verify-only.
+        'kms-2025' => [
+            'provider'   => \Chronicle\Signing\EcdsaSigningProvider::class,
+            'algorithm'  => 'ecdsa-p256',
+            'public_key' => env('CHRONICLE_KMS_2025_PUBLIC_KEY'),
+        ],
+        // Active
+        'kms-2026' => [
+            'provider'   => AwsKmsSigningProvider::class,
+            'algorithm'  => 'ecdsa-p256',
+            'key_arn'    => env('CHRONICLE_KMS_KEY_ARN'),
+            'public_key' => env('CHRONICLE_KMS_PUBLIC_KEY'),
+        ],
+    ],
+],
+```
+
+> **Note:** `AwsKmsSigningProvider` requires `key_arn` at construction — it cannot be used
+> as a verify-only provider. For retired KMS keys, switch the entry to
+> `Chronicle\Signing\EcdsaSigningProvider` (from core) with only `public_key` set, as shown
+> above. Core's `EcdsaSigningProvider` handles the local-verify-only case.
+
+---
+
+## License
+
+MIT

@@ -20,9 +20,14 @@ class KmsAwsServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->mergeConfigFrom(__DIR__.'/../config/chronicle-kms.php', 'chronicle-kms');
+
         $this->app->singleton(KmsClient::class, function (): KmsClient {
+            /** @var string $region */
+            $region = config('chronicle-kms.region', 'us-east-1');
+
             return new KmsClient([
-                'region' => (string) env('AWS_DEFAULT_REGION', 'us-east-1'),
+                'region' => $region,
                 'version' => 'latest',
             ]);
         });

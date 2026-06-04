@@ -21,7 +21,7 @@
   "require": {
     "php": "^8.2",
     "ext-openssl": "*",
-    "laravel-chronicle/core": "dev-feat/v1.10-key-rotation",
+    "laravel-chronicle/core": "^1.10",
     "aws/aws-sdk-php": "^3.0"
   },
   "require-dev": {
