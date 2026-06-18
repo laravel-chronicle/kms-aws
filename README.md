@@ -165,6 +165,34 @@ Example two-key ring after rotation:
 
 ---
 
+## KEK encryption provider (crypto-shredding)
+
+Chronicle v1.12 can encrypt PII payload fields under a per-subject DEK, wrapping
+those DEKs under a Key Encryption Key (KEK). This package can hold the KEK in
+AWS KMS so wrapped DEKs are protected outside the application.
+
+Point `chronicle.encryption.kek` at the KMS provider:
+
+```php
+// config/chronicle.php
+use Chronicle\KmsAws\KmsKeyEncryptionProvider;
+
+'encryption' => [
+    'enabled' => true,
+    'kek' => [
+        'provider' => KmsKeyEncryptionProvider::class,
+        'key' => env('CHRONICLE_KMS_KEK_ARN'),   // KMS key ARN/id for Encrypt/Decrypt
+        'id'  => env('CHRONICLE_KMS_KEK_ID'),     // kekId recorded per subject key
+    ],
+],
+```
+
+Required IAM actions on the KEK: `kms:Encrypt`, `kms:Decrypt`. The `KmsClient` is
+resolved from the container (region from `AWS_DEFAULT_REGION`), so no extra wiring
+is needed beyond installing this package.
+
+---
+
 ## License
 
 MIT
