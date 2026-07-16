@@ -35,7 +35,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
     strategy:
       fail-fast: true
       matrix:
