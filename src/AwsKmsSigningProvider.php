@@ -1,16 +1,19 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Chronicle\KmsAws;
 
+use Aws\Exception\AwsException;
 use Aws\Kms\KmsClient;
 use Chronicle\Signing\LocalVerifyProvider;
 use InvalidArgumentException;
 use RuntimeException;
 
 /**
- * AWS KSM signing provider for Chronicle.
+ * AWS KMS signing provider for Chronicle.
  *
- * sign()   - sends SHA256(payload) to KSM Sign API (DIGEST mode, ECDSA_SHA_256).
+ * sign()   - sends SHA256(payload) to KMS Sign API (DIGEST mode, ECDSA_SHA_256).
  * verify() - validates locally via LocalVerifyProvider using a cached PEM public key.
  *            No network call required for verification.
  *
@@ -51,7 +54,7 @@ class AwsKmsSigningProvider extends LocalVerifyProvider
 
         if (! is_string($publicKey) || $publicKey === '') {
             throw new InvalidArgumentException(
-                'Missing public_key for AwsKmsSingingProvider - provide a PEM-encoded EC public key.'
+                'Missing public_key for AwsKmsSigningProvider - provide a PEM-encoded EC public key.'
             );
         }
 
@@ -65,12 +68,16 @@ class AwsKmsSigningProvider extends LocalVerifyProvider
     {
         $digest = hash('sha256', $payload, true);
 
-        $result = $this->kms->sign([
-            'KeyId' => $this->keyArn,
-            'Message' => $digest,
-            'MessageType' => 'DIGEST',
-            'SigningAlgorithm' => 'ECDSA_SHA_256',
-        ]);
+        try {
+            $result = $this->kms->sign([
+                'KeyId' => $this->keyArn,
+                'Message' => $digest,
+                'MessageType' => 'DIGEST',
+                'SigningAlgorithm' => 'ECDSA_SHA_256',
+            ]);
+        } catch (AwsException $e) {
+            throw $this->sanitizeKmsException('Sign', $e);
+        }
 
         $signature = $result->get('Signature');
 
@@ -79,6 +86,21 @@ class AwsKmsSigningProvider extends LocalVerifyProvider
         }
 
         return base64_encode($signature);
+    }
+
+    /**
+     * Rethrow an AWS SDK failure as a sanitized RuntimeException.
+     *
+     * SECURITY - the original AwsException retains the KMS command via getCommand().
+     * We do NOT chain it as $previous, so no raw AWS request context propagates.
+     * Only the operation name and the AWS error code (safe metadata) are preserved.
+     */
+    protected function sanitizeKmsException(string $operation, AwsException $e): RuntimeException
+    {
+        $code = $e->getAwsErrorCode();
+        $suffix = is_string($code) && $code !== '' ? " ($code)" : '';
+
+        return new RuntimeException("KMS $operation failed$suffix.");
     }
 
     public function algorithm(): string

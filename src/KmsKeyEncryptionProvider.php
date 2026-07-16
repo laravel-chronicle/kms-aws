@@ -1,7 +1,10 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Chronicle\KmsAws;
 
+use Aws\Exception\AwsException;
 use Aws\Kms\KmsClient;
 use Chronicle\Contracts\KeyEncryptionProvider;
 use InvalidArgumentException;
@@ -22,11 +25,11 @@ use RuntimeException;
  */
 final class KmsKeyEncryptionProvider implements KeyEncryptionProvider
 {
-    private string $keyId;
+    protected string $keyId;
 
-    private string $kekId;
+    protected string $kekId;
 
-    private KmsClient $kms;
+    protected KmsClient $kms;
 
     /**
      * @param  array<string, mixed>  $config
@@ -51,10 +54,14 @@ final class KmsKeyEncryptionProvider implements KeyEncryptionProvider
 
     public function wrap(string $dek): string
     {
-        $result = $this->kms->encrypt([
-            'KeyId' => $this->keyId,
-            'Plaintext' => $dek,
-        ]);
+        try {
+            $result = $this->kms->encrypt([
+                'KeyId' => $this->keyId,
+                'Plaintext' => $dek,
+            ]);
+        } catch (AwsException $e) {
+            throw $this->sanitizeKmsException('Encrypt', $e);
+        }
 
         $blob = $result->get('CiphertextBlob');
 
@@ -65,6 +72,17 @@ final class KmsKeyEncryptionProvider implements KeyEncryptionProvider
         return base64_encode($blob);
     }
 
+    /**
+     * Unwrap a wrapped DEK back to its plaintext bytes via KMS Decrypt.
+     *
+     * SECURITY - the returned string is live plaintext key material. Its lifetime
+     * is the caller's responsibility: it cannot be scrubbed here because it is the
+     * return value the caller needs. The caller MUST NOT log, persist, serialize,
+     * var_dump, or otherwise copy it, and SHOULD zero it (e.g. sodium_memzero()
+     * where available) as soon as the DEK has been used. Nothing inside this
+     * method retains plaintext beyond return - the only sensitive intermediates
+     * are the SDK Result (owned by the AWS SDK) and this return value.
+     */
     public function unwrap(string $wrapped): string
     {
         $blob = base64_decode($wrapped, true);
@@ -73,10 +91,14 @@ final class KmsKeyEncryptionProvider implements KeyEncryptionProvider
             throw new InvalidArgumentException('Wrapped DEK is not valid base64.');
         }
 
-        $result = $this->kms->decrypt([
-            'KeyId' => $this->keyId,
-            'CiphertextBlob' => $blob,
-        ]);
+        try {
+            $result = $this->kms->decrypt([
+                'KeyId' => $this->keyId,
+                'CiphertextBlob' => $blob,
+            ]);
+        } catch (AwsException $e) {
+            throw $this->sanitizeKmsException('Decrypt', $e);
+        }
 
         $plaintext = $result->get('Plaintext');
 
@@ -90,5 +112,22 @@ final class KmsKeyEncryptionProvider implements KeyEncryptionProvider
     public function kekId(): string
     {
         return $this->kekId;
+    }
+
+    /**
+     * Rethrow an AWS SDK failure as a sanitized RuntimeException.
+     *
+     * SECURITY - the original AwsException retains the KMS command via getCommand(),
+     * which for Encrypt still holds the plaintext DEK. We therefore do NOT chain it
+     * as $previous: that would keep the plaintext reachable through getPrevious().
+     * Only the operation name and the AWS error code (safe, non-sensitive metadata)
+     * are preserved.
+     */
+    protected function sanitizeKmsException(string $operation, AwsException $e): RuntimeException
+    {
+        $code = $e->getAwsErrorCode();
+        $suffix = is_string($code) && $code !== '' ? " ($code)" : '';
+
+        return new RuntimeException("KMS $operation failed$suffix.");
     }
 }
