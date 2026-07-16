@@ -22,3 +22,6 @@ phpunit.xml
 phpstan.neon
 testbench.yaml
 /coverage
+
+# Local environment (real-AWS test tier credentials - never commit)
+.env

@@ -1,9 +1,20 @@
 # laravel-chronicle/kms-aws
 
-AWS KMS signing adapter for the [Chronicle audit ledger](https://github.com/laravel-chronicle/core).
+[![Tests](https://github.com/laravel-chronicle/kms-aws/actions/workflows/run-tests.yml/badge.svg)](https://github.com/laravel-chronicle/kms-aws/actions/workflows/run-tests.yml)
+[![PHPStan](https://github.com/laravel-chronicle/kms-aws/actions/workflows/phpstan.yml/badge.svg)](https://github.com/laravel-chronicle/kms-aws/actions/workflows/phpstan.yml)
+[![Latest Version](https://img.shields.io/packagist/v/laravel-chronicle/kms-aws.svg)](https://packagist.org/packages/laravel-chronicle/kms-aws)
+[![Total Downloads](https://img.shields.io/packagist/dt/laravel-chronicle/kms-aws.svg)](https://packagist.org/packages/laravel-chronicle/kms-aws)
+[![License](https://img.shields.io/packagist/l/laravel-chronicle/kms-aws.svg)](LICENSE)
 
-Signs Chronicle checkpoints and exports via AWS KMS (ECDSA P-256). Verification
-is always **offline** — no AWS API call needed — using a cached public key.
+AWS KMS custody for the [Chronicle audit ledger](https://github.com/laravel-chronicle/core).
+
+Keeps Chronicle's cryptographic key material inside AWS KMS instead of on the
+application server. The package provides two independent providers:
+
+- **Signing** (`AwsKmsSigningProvider`) - signs checkpoints and exports via KMS (ECDSA P-256). Verification is always **offline**, using a cached public key, so no AWS call is needed to verify.
+- **KEK custody** (`KmsKeyEncryptionProvider`) - holds the Key Encryption Key for Chronicle's crypto-shredding, wrapping and unwrapping per-subject DEKs through KMS `Encrypt`/`Decrypt` so the KEK never leaves the HSM.
+
+Use either or both. The signing setup is covered first; KEK custody has its own section below.
 
 ---
 
@@ -28,7 +39,9 @@ The package auto-discovers its service provider via Laravel's package discovery.
 
 ## AWS Setup
 
-### Create a KMS key
+> This section sets up the **signing** provider. If you also want KEK custody for crypto-shredding, you'll need a separate **symmetric** key - see [KEK encryption provider](#kek-encryption-provider-crypto-shredding) below. The two providers use different key types and are configured independently.
+
+### Create a KMS key (signing)
 
 Create an asymmetric KMS key with:
 - **Key type:** Asymmetric
@@ -55,8 +68,7 @@ Attach the following IAM policy to the role that runs your application:
 }
 ```
 
-`kms:GetPublicKey` is **not** required at runtime — the public key is cached in your
-application config and never fetched from KMS during verification.
+`kms:GetPublicKey` is **not** required at runtime - the public key is cached in your application config and never fetched from KMS during verification.
 
 ### Retrieve and cache the public key
 
@@ -120,8 +132,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
 
 | Operation  | Where it runs                                                  |
 |------------|----------------------------------------------------------------|
-| `sign()`   | **Remote** — calls KMS `Sign` API with `MessageType: DIGEST`   |
-| `verify()` | **Local** — `openssl_verify` against the cached PEM public key |
+| `sign()`   | **Remote** - calls KMS `Sign` API with `MessageType: DIGEST`   |
+| `verify()` | **Local** - `openssl_verify` against the cached PEM public key |
 
 The private key never leaves AWS KMS. Verification is offline and instant.
 
@@ -140,7 +152,7 @@ Example two-key ring after rotation:
 'signing' => [
     'active' => 'kms-2026',
     'keys' => [
-        // Retired — switch to EcdsaSigningProvider (from core) for verify-only mode.
+        // Retired - switch to EcdsaSigningProvider (from core) for verify-only mode.
         // AwsKmsSigningProvider requires key_arn and cannot be verify-only.
         'kms-2025' => [
             'provider'   => \Chronicle\Signing\EcdsaSigningProvider::class,
@@ -158,10 +170,7 @@ Example two-key ring after rotation:
 ],
 ```
 
-> **Note:** `AwsKmsSigningProvider` requires `key_arn` at construction — it cannot be used
-> as a verify-only provider. For retired KMS keys, switch the entry to
-> `Chronicle\Signing\EcdsaSigningProvider` (from core) with only `public_key` set, as shown
-> above. Core's `EcdsaSigningProvider` handles the local-verify-only case.
+> **Note:** `AwsKmsSigningProvider` requires `key_arn` at construction - it cannot be used as a verify-only provider. For retired KMS keys, switch the entry to `Chronicle\Signing\EcdsaSigningProvider` (from core) with only `public_key` set, as shown above. Core's `EcdsaSigningProvider` handles the local-verify-only case.
 
 ---
 
@@ -190,6 +199,25 @@ use Chronicle\KmsAws\KmsKeyEncryptionProvider;
 Required IAM actions on the KEK: `kms:Encrypt`, `kms:Decrypt`. The `KmsClient` is
 resolved from the container (region from `AWS_DEFAULT_REGION`), so no extra wiring
 is needed beyond installing this package.
+
+### KmsClient options
+
+The `KmsClient` singleton is shaped from `config/chronicle-kms.php`. All keys have sensible defaults - set nothing, and you get a standard region-derived client.
+
+```dotenv
+# Region the KMS client talks to (standard AWS variable)
+AWS_DEFAULT_REGION=eu-west-1
+
+# Optional: override the KMS endpoint. Leave unset for normal AWS use.
+# Point at LocalStack for testing, or a KMS FIPS endpoint for regulated deployments.
+CHRONICLE_KMS_ENDPOINT=http://localhost:4566
+# CHRONICLE_KMS_ENDPOINT=https://kms-fips.eu-west-1.amazonaws.com
+
+# Optional: pin the KMS API version (defaults to 'latest')
+CHRONICLE_KMS_VERSION=latest
+```
+
+Credentials are never read from this config - they flow through the standard AWS credential chain (env vars, IAM roles, etc.). For anything these keys don't cover - a custom credential provider, or a fully custom client - re-bind `Aws\Kms\KmsClient` in your application's `AppServiceProvider`; that binding wins over this provider's default.
 
 ---
 

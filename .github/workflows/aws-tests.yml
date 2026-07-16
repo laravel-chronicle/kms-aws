@@ -1,0 +1,63 @@
+name: AWS Tests
+
+# The real-AWS test tier: a tiny opt-in backstop that runs the mocked suite's
+# blind spot against live KMS (see CONTRIBUTING.md "real-AWS tier").
+#
+# It runs ONLY on push to main and on a nightly schedule - never on pull_request.
+# Fork PRs cannot read secrets, so running it there would show red checks to
+# exactly the external contributors we want to keep unblocked. The unit/PHPStan/
+# Pint jobs continue to cover every push and PR, including forks.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.php'
+      - '.github/workflows/aws-tests.yml'
+      - 'composer.json'
+  schedule:
+    # Nightly at 03:17 UTC.
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  aws:
+    name: Live KMS (opt-in)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Never run on forks: they have no secrets, so the tier would just skip.
+    if: github.repository_owner == 'laravel-chronicle'
+
+    env:
+      # Gate: when the KMS_AWS_TESTS secret is unset (e.g. secrets not configured),
+      # this is empty and the tier skips cleanly - the job stays green, never red.
+      KMS_AWS_TESTS: ${{ secrets.KMS_AWS_TESTS }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      KMS_TEST_SIGNING_KEY_ARN: ${{ secrets.KMS_TEST_SIGNING_KEY_ARN }}
+      KMS_TEST_SIGNING_PUBLIC_KEY: ${{ secrets.KMS_TEST_SIGNING_PUBLIC_KEY }}
+      KMS_TEST_ENCRYPTION_KEY_ARN: ${{ secrets.KMS_TEST_ENCRYPTION_KEY_ARN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: 8.4
+          extensions: sodium
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction
+
+      - name: Execute AWS tier
+        run: composer test:aws

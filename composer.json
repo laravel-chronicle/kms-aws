@@ -12,6 +12,18 @@
     "ecdsa",
     "signing"
   ],
+  "homepage": "https://github.com/laravel-chronicle/kms-aws",
+  "support": {
+    "email": "support@laravel-chronicle.dev",
+    "issues": "https://github.com/laravel-chronicle/kms-aws/issues",
+    "docs": "https://laravel-chronicle.dev"
+  },
+  "funding": [
+    {
+      "type": "github",
+      "url": "https://github.com/sponsors/ntoufoudis"
+    }
+  ],
   "authors": [
     {
       "name": "Vasileios Ntoufoudis",
@@ -21,7 +33,7 @@
   "require": {
     "php": "^8.2",
     "ext-openssl": "*",
-    "laravel-chronicle/core": "^1.10",
+    "laravel-chronicle/core": "^1.12",
     "aws/aws-sdk-php": "^3.0"
   },
   "require-dev": {
@@ -48,22 +60,25 @@
       ]
     }
   },
-  "repositories": [
-    {
-      "type": "path",
-      "url": "../core",
-      "options": {
-        "symlink": true
-      }
-    }
-  ],
+  "minimum-stability": "stable",
+  "prefer-stable": true,
   "config": {
+    "sort-packages": true,
     "allow-plugins": {
       "pestphp/pest-plugin": true
     }
   },
   "scripts": {
-    "analyse": "vendor/bin/phpstan analyse --memory-limit=2G",
-    "test": "vendor/bin/pest"
+    "lint": "vendor/bin/pint",
+    "test:lint": "vendor/bin/pint --test -v",
+    "test:types": "vendor/bin/phpstan analyse",
+    "test:unit": "vendor/bin/pest --exclude-group=aws",
+    "test:aws": "vendor/bin/pest --group=aws",
+    "test:all": "vendor/bin/pest",
+    "test": [
+      "@test:lint",
+      "@test:types",
+      "@test:unit"
+    ]
   }
 }
